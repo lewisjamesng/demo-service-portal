@@ -63,9 +63,10 @@ jobs:
         id: osv
         continue-on-error: true
         run: |
-          osv-scanner scan source -r . --format sarif --output osv-scanner.sarif || true
-          osv-scanner scan source -r . --format json --output osv-scanner-report.json || true
+          osv-scanner scan source -r . --format sarif --output-file osv-scanner.sarif || true
+          osv-scanner scan source -r . --format json --output-file osv-scanner-report.json || true
           osv-scanner scan source -r . | tee osv-scanner.txt
+          exit "${PIPESTATUS[0]}"
       - name: Flag findings
         if: always()
         run: |
