@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - run: mvn -B -ntp -DskipTests package
+
+  test:
+    name: test
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      - run: mvn -B -ntp verify
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          if-no-files-found: warn
+
+  security-scan:
+    name: security-scan
+    # Findings are expected on the baseline: keep the workflow green, show warnings.
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      OSV_SCANNER_VERSION: v2.7.0
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install osv-scanner
+        run: |
+          curl -sSfL -o /usr/local/bin/osv-scanner \
+            "https://github.com/google/osv-scanner/releases/download/${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          chmod +x /usr/local/bin/osv-scanner
+      - name: osv-scanner
+        id: osv
+        continue-on-error: true
+        run: |
+          osv-scanner scan source -r . --format sarif --output osv-scanner.sarif || true
+          osv-scanner scan source -r . --format json --output osv-scanner-report.json || true
+          osv-scanner scan source -r . | tee osv-scanner.txt
+      - name: Flag findings
+        if: always()
+        run: |
+          {
+            echo '## Security scan'
+            echo '```'
+            cat osv-scanner.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.osv.outcome }}" = "failure" ]; then
+            echo "::warning title=Vulnerable dependencies::osv-scanner reported known vulnerabilities. See the security-scan artifact and code scanning alerts."
+          fi
+      - name: Upload scan reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: security-scan-reports
+          path: |
+            osv-scanner-report.json
+            osv-scanner.sarif
+            osv-scanner.txt
+          if-no-files-found: warn
+      - name: Upload SARIF to code scanning
+        if: always() && hashFiles('osv-scanner.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: osv-scanner.sarif
+          category: osv-scanner
